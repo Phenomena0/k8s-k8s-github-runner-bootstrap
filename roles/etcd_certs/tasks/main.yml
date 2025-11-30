@@ -12,11 +12,11 @@
     primary_etcd_host: "{{ etcd_nodes[0] }}"
 
 - name: Fetch SSH private key from AWS Secrets Manager
-  command: >
-    aws secretsmanager get-secret-value
-    --secret-id {{ ssh_private_key_secret }}
-    --query SecretString
-    --output text
+  shell: |
+    aws secretsmanager get-secret-value \
+      --secret-id {{ ssh_private_key_secret }} \
+      --query SecretString \
+      --output text
   register: ssh_key_secret
   changed_when: false
 
