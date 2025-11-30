@@ -1,0 +1,15 @@
+- hosts: etcd
+  become: yes
+  gather_facts: yes
+
+  vars:
+    ssh_private_key_secret: "k8s-etcd-ssh-key-secret-id"
+    #ssh_private_key_path: "/home/ec2-user/.ssh/etcd.pem"
+    target_user: "ec2-user"
+    cluster_state: "new"
+    initial_cluster: "etcd-0=https://10.0.10.11:2380,etcd-1=https://10.0.20.12:2380,etcd-2=https://10.0.30.13:2380"
+    primary_node_ip: "10.0.10.11"
+
+  roles:
+    - role: common
+    - role: etcd_bootstrap 

@@ -1,0 +1,186 @@
+# ---------------------------------------------------------------------------
+# Preconditions / environment
+# ---------------------------------------------------------------------------
+
+- name: Fail if required variables are missing
+  assert:
+    that:
+      - ssh_private_key_secret | length > 0
+      - initial_cluster | length > 0
+      - cluster_state | length > 0
+      - cert_action in ['create', 'copy']
+      - (cert_action == 'create') or (cert_action == 'copy' and primary_node_ip | length > 0)
+    fail_msg: "Missing or invalid required vars (ssh_private_key_secret, initial_cluster, cluster_state, cert_action, primary_node_ip)"
+
+- name: Ensure etcd PKI directory exists
+  file:
+    path: /etc/kubernetes/pki/etcd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure etcd log file exists
+  file:
+    path: "{{ etcd_log_file }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+
+# ---------------------------------------------------------------------------
+# Fetch "metadata" (we use Ansible facts instead of IMDS)
+# ---------------------------------------------------------------------------
+
+- name: Set etcd hostname and private IP facts
+  set_fact:
+    etcd_private_ip: "{{ ansible_default_ipv4.address }}"
+    etcd_hostname: "{{ ansible_hostname }}"
+
+# ---------------------------------------------------------------------------
+# Fetch SSH private key from AWS Secrets Manager
+# (equivalent to fetch_private_key + write_private_key)
+# ---------------------------------------------------------------------------
+
+- name: Fetch SSH private key from AWS Secrets Manager
+  command: >
+    aws secretsmanager get-secret-value
+    --secret-id {{ ssh_private_key_secret }}
+    --query SecretString
+    --output text
+  register: ssh_key_cmd
+  changed_when: false
+
+- name: Fail if SSH key could not be retrieved
+  fail:
+    msg: "Failed to fetch SSH private key from Secrets Manager"
+  when: ssh_key_cmd.rc != 0 or (ssh_key_cmd.stdout | length) == 0
+
+- name: Ensure SSH directory exists
+  file:
+    path: "{{ etcd_ssh_key_path | dirname }}"
+    state: directory
+    owner: "{{ etcd_target_user }}"
+    group: "{{ etcd_target_user }}"
+    mode: "0700"
+
+- name: Write SSH private key to {{ etcd_ssh_key_path }}
+  copy:
+    dest: "{{ etcd_ssh_key_path }}"
+    content: "{{ ssh_key_cmd.stdout }}"
+    owner: "{{ etcd_target_user }}"
+    group: "{{ etcd_target_user }}"
+    mode: "0600"
+
+# ---------------------------------------------------------------------------
+# Render kubeadm etcd ClusterConfiguration (write_kubeadm_config)
+# ---------------------------------------------------------------------------
+
+- name: Ensure /etc/kubernetes exists
+  file:
+    path: /etc/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render kubeadm etcd configuration
+  template:
+    src: kubeadm-etcd.yaml.j2
+    dest: "{{ kubeadm_etcd_config }}"
+    owner: root
+    group: root
+    mode: "0644"
+
+# ---------------------------------------------------------------------------
+# Certificate creation path (CERT_ACTION == "create")
+# ---------------------------------------------------------------------------
+
+- name: Generate etcd CA certificates (primary node)
+  command: kubeadm init phase certs etcd-ca
+  args:
+    creates: /etc/kubernetes/pki/etcd/ca.crt
+  when: cert_action == 'create'
+
+- name: Generate per-node etcd certificates on primary
+  command: kubeadm init phase certs {{ item }} --config="{{ kubeadm_etcd_config }}"
+  loop:
+    - etcd-server
+    - etcd-peer
+    - etcd-healthcheck-client
+    - apiserver-etcd-client
+  when: cert_action == 'create'
+
+- name: Ensure all key files are chmod 600 (primary)
+  shell: |
+    set -euo pipefail
+    find /etc/kubernetes/pki -type f -name '*.key' -exec chmod 600 {} \;
+  args:
+    executable: /bin/bash
+  when: cert_action == 'create'
+
+# ---------------------------------------------------------------------------
+# Certificate copy path (CERT_ACTION == "copy")
+# ---------------------------------------------------------------------------
+
+- name: Copy etcd CA files from primary node
+  shell: |
+    set -euo pipefail
+    remote_file="/etc/kubernetes/pki/etcd/{{ item }}"
+    remote_dir="$(dirname "$remote_file")"
+    remote_name="$(basename "$remote_file")"
+    mkdir -p /etc/kubernetes/pki/etcd
+    ssh -i "{{ etcd_ssh_key_path }}" -o StrictHostKeyChecking=no \
+      "{{ etcd_target_user }}@{{ primary_node_ip }}" \
+      "cd '$remote_dir' && sudo tar czf - '$remote_name'" \
+      | tar xzf - -C /etc/kubernetes/pki/etcd
+  args:
+    executable: /bin/bash
+  register: copy_etcd_ca_result
+  retries: 10
+  delay: 15
+  until: copy_etcd_ca_result.rc == 0
+  when: cert_action == 'copy'
+  loop:
+    - ca.crt
+    - ca.key
+
+- name: Copy apiserver-etcd-client certs from primary node
+  shell: |
+    set -euo pipefail
+    remote_file="/etc/kubernetes/pki/{{ item }}"
+    remote_dir="$(dirname "$remote_file")"
+    remote_name="$(basename "$remote_file")"
+    mkdir -p /etc/kubernetes/pki
+    ssh -i "{{ etcd_ssh_key_path }}" -o StrictHostKeyChecking=no \
+      "{{ etcd_target_user }}@{{ primary_node_ip }}" \
+      "cd '$remote_dir' && sudo tar czf - '$remote_name'" \
+      | tar xzf - -C /etc/kubernetes/pki
+  args:
+    executable: /bin/bash
+  register: copy_apiserver_etcd_result
+  retries: 10
+  delay: 15
+  until: copy_apiserver_etcd_result.rc == 0
+  when: cert_action == 'copy'
+  loop:
+    - apiserver-etcd-client.crt
+    - apiserver-etcd-client.key
+
+- name: Generate per-node etcd certificates on followers
+  command: kubeadm init phase certs {{ item }} --config="{{ kubeadm_etcd_config }}"
+  loop:
+    - etcd-server
+    - etcd-peer
+    - etcd-healthcheck-client
+    - apiserver-etcd-client
+  when: cert_action == 'copy'
+
+# ---------------------------------------------------------------------------
+# Static pod manifest (generate_static_manifest)
+# ---------------------------------------------------------------------------
+
+- name: Generate static pod manifest for etcd
+  command: kubeadm init phase etcd local --config="{{ kubeadm_etcd_config }}"
+  args:
+    creates: /etc/kubernetes/manifests/etcd.yaml

@@ -1,0 +1,10 @@
+---
+etcd_log_file: "/var/log/etcd-bootstrap.log"
+kubeadm_etcd_config: "/etc/kubernetes/kubeadm-etcd.yaml"
+etcd_target_user: "{{ target_user | default('ec2-user') }}"
+etcd_ssh_key_path: "{{ ssh_private_key_path | default('/home/' + etcd_target_user + '/.ssh/etcd.pem') }}"
+cluster_state: "{{ cluster_state | default('new') }}"
+initial_cluster: "{{ initial_cluster | default('') }}"
+cert_action: "{{ cert_action | default('create') }}"
+primary_node_ip: "{{ primary_node_ip | default('') }}"
+ssh_private_key_secret: "{{ ssh_private_key_secret | default('') }}"

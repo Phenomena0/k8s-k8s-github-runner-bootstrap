@@ -1,0 +1,24 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+etcd:
+  local:
+    dataDir: /var/lib/etcd
+    serverCertSANs:
+      - {{ etcd_hostname }}
+      - {{ etcd_private_ip }}
+    peerCertSANs:
+      - {{ etcd_hostname }}
+      - {{ etcd_private_ip }}
+    extraArgs:
+      - name: initial-cluster
+        value: "{{ initial_cluster }}"
+      - name: initial-cluster-state
+        value: "{{ cluster_state }}"
+      - name: initial-advertise-peer-urls
+        value: "https://{{ etcd_private_ip }}:2380"
+      - name: listen-peer-urls
+        value: "https://{{ etcd_private_ip }}:2380"
+      - name: listen-client-urls
+        value: "https://{{ etcd_private_ip }}:2379,https://127.0.0.1:2379"
+      - name: advertise-client-urls
+        value: "https://{{ etcd_private_ip }}:2379"
