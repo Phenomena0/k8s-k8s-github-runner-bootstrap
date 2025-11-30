@@ -14,6 +14,7 @@
 - name: Fetch SSH private key from AWS Secrets Manager
   command: >
     aws secretsmanager get-secret-value
+    --region {{ aws_region | default('us-east-1') }}
     --secret-id {{ ssh_private_key_secret }}
     --query SecretString
     --output text
