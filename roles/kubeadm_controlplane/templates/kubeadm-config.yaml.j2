@@ -1,0 +1,28 @@
+apiVersion: kubeadm.k8s.io/v1beta4
+kind: ClusterConfiguration
+kubernetesVersion: {{ kubernetes_version | default('v1.34.2') }}
+
+# We choose whether kubeadm talks via LB or directly via node IP.
+{% if use_lb_for_kubeadm | default(false) %}
+controlPlaneEndpoint: "{{ controlplane_endpoint_dns }}:{{ controlplane_port | default(6443) }}"
+{% else %}
+controlPlaneEndpoint: "{{ ansible_default_ipv4.address }}:{{ controlplane_port | default(6443) }}"
+{% endif %}
+
+apiServer:
+  certSANs:
+    - "{{ ansible_default_ipv4.address }}"
+    - "{{ ansible_hostname }}"
+{% if controlplane_endpoint_dns is defined %}
+    - "{{ controlplane_endpoint_dns }}"
+{% endif %}
+
+etcd:
+  external:
+    endpoints:
+{% for ip in etcd_nodes %}
+      - https://{{ ip }}:2379
+{% endfor %}
+    caFile: /etc/kubernetes/pki/etcd/ca.crt
+    certFile: /etc/kubernetes/pki/apiserver-etcd-client.crt
+    keyFile: /etc/kubernetes/pki/apiserver-etcd-client.key

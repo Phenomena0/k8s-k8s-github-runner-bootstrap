@@ -1,0 +1,89 @@
+- name: Fail if required vars are missing
+  assert:
+    that:
+      - etcd_nodes | length > 0
+      - ssh_private_key_secret is defined
+      - ssh_private_key_path is defined
+      - target_user is defined
+    fail_msg: "Missing required vars: etcd_nodes, ssh_private_key_secret, ssh_private_key_path, target_user"
+
+- name: Set primary etcd host
+  set_fact:
+    primary_etcd_host: "{{ etcd_nodes[0] }}"
+
+- name: Fetch SSH private key from AWS Secrets Manager
+  command: >
+    aws secretsmanager get-secret-value
+    --secret-id {{ ssh_private_key_secret }}
+    --query SecretString
+    --output text
+  register: ssh_key_secret
+  changed_when: false
+
+- name: Ensure SSH directory for {{ target_user }} exists
+  file:
+    path: "/home/{{ target_user }}/.ssh"
+    state: directory
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: "0700"
+
+- name: Write SSH private key for etcd
+  copy:
+    dest: "{{ ssh_private_key_path }}"
+    content: "{{ ssh_key_secret.stdout }}"
+    owner: "{{ target_user }}"
+    group: "{{ target_user }}"
+    mode: "0600"
+
+- name: Copy etcd cert/key files from primary etcd host
+  vars:
+    remote_user: "{{ target_user }}"
+  shell: |
+    set -e
+    remote_file="/etc/kubernetes/pki/etcd/{{ item }}"
+    remote_dir="$(dirname "$remote_file")"
+    remote_name="$(basename "$remote_file")"
+
+    ssh -i "{{ ssh_private_key_path }}" -o StrictHostKeyChecking=no \
+      "{{ remote_user }}@{{ primary_etcd_host }}" \
+      "cd '$remote_dir' && sudo tar czf - '$remote_name'" \
+      | sudo tar xzf - -C /etc/kubernetes/pki/etcd/
+  args:
+    executable: /bin/bash
+  register: etcd_copy_result
+  retries: 10
+  delay: 15
+  until: etcd_copy_result.rc == 0
+  loop:
+    - ca.crt
+    - ca.key
+    - server.crt
+    - server.key
+    - peer.crt
+    - peer.key
+    - healthcheck-client.crt
+    - healthcheck-client.key
+
+- name: Copy apiserver-etcd-client certs from primary etcd/control-plane host
+  vars:
+    remote_user: "{{ target_user }}"
+  shell: |
+    set -e
+    remote_file="/etc/kubernetes/pki/{{ item }}"
+    remote_dir="$(dirname "$remote_file")"
+    remote_name="$(basename "$remote_file")"
+
+    ssh -i "{{ ssh_private_key_path }}" -o StrictHostKeyChecking=no \
+      "{{ remote_user }}@{{ primary_etcd_host }}" \
+      "cd '$remote_dir' && sudo tar czf - '$remote_name'" \
+      | sudo tar xzf - -C /etc/kubernetes/pki/
+  args:
+    executable: /bin/bash
+  register: apiserver_etcd_copy_result
+  retries: 10
+  delay: 15
+  until: apiserver_etcd_copy_result.rc == 0
+  loop:
+    - apiserver-etcd-client.crt
+    - apiserver-etcd-client.key

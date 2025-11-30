@@ -1,0 +1,31 @@
+- name: Ensure kubeadm config directory exists
+  file:
+    path: /etc/kubernetes
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Render kubeadm config
+  template:
+    src: kubeadm-config.yaml.j2
+    dest: /etc/kubernetes/kubeadm-config.yaml
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Run kubeadm init
+  command: >
+    kubeadm init
+    --config /etc/kubernetes/kubeadm-config.yaml
+    --upload-certs
+  args:
+    creates: /etc/kubernetes/admin.conf
+  register: kubeadm_init_result
+  retries: 1
+  delay: 5
+
+- name: Show kubeadm init output in log
+  debug:
+    var: kubeadm_init_result.stdout_lines
+  when: kubeadm_init_result is defined

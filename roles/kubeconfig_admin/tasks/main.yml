@@ -1,0 +1,28 @@
+- name: Ensure kube-admin group exists
+  group:
+    name: kube-admin
+    system: yes
+    state: present
+
+- name: Set group and permissions on admin.conf
+  file:
+    path: /etc/kubernetes/admin.conf
+    owner: root
+    group: kube-admin
+    mode: "0640"
+
+- name: Create global kubeconfig env script
+  copy:
+    dest: /etc/profile.d/kubeconfig.sh
+    content: |
+      export KUBECONFIG=/etc/kubernetes/admin.conf
+    owner: root
+    group: root
+    mode: "0644"
+
+- name: Add kube-admin users to kube-admin group
+  user:
+    name: "{{ item }}"
+    groups: kube-admin
+    append: yes
+  loop: "{{ kube_admin_users | default([]) }}"

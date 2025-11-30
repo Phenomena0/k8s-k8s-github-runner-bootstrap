@@ -1,0 +1,23 @@
+- name: Ensure Kubernetes etcd pki directory exists
+  file:
+    path: /etc/kubernetes/pki/etcd
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure Kubernetes pki directory exists
+  file:
+    path: /etc/kubernetes/pki
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Ensure control plane log file exists
+  file:
+    path: /var/log/controlplane-bootstrap.log
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
