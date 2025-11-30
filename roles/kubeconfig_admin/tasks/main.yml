@@ -15,6 +15,7 @@
   copy:
     dest: /etc/profile.d/kubeconfig.sh
     content: |
+      # Use the cluster admin kubeconfig by default
       export KUBECONFIG=/etc/kubernetes/admin.conf
     owner: root
     group: root
@@ -25,4 +26,50 @@
     name: "{{ item }}"
     groups: kube-admin
     append: yes
+  loop: "{{ kube_admin_users | default([]) }}"
+
+- name: Ensure /root/.kube directory exists
+  file:
+    path: /root/.kube
+    state: directory
+    owner: root
+    group: root
+    mode: "0700"
+
+- name: Copy admin.conf to root kubeconfig
+  copy:
+    src: /etc/kubernetes/admin.conf
+    dest: /root/.kube/config
+    owner: root
+    group: root
+    mode: "0600"
+    remote_src: yes
+
+- name: Ensure kubeconfig for admin users is in their home
+  block:
+    - name: Get home directory for {{ item }}
+      command: "getent passwd {{ item }}"
+      register: passwd_entry
+      changed_when: false
+
+    - name: Set home fact for {{ item }}
+      set_fact:
+        kube_user_home: "{{ passwd_entry.stdout.split(':')[5] }}"
+
+    - name: Ensure .kube directory exists for {{ item }}
+      file:
+        path: "{{ kube_user_home }}/.kube"
+        state: directory
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: "0700"
+
+    - name: Copy admin.conf to user kubeconfig
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "{{ kube_user_home }}/.kube/config"
+        owner: "{{ item }}"
+        group: "{{ item }}"
+        mode: "0600"
+        remote_src: yes
   loop: "{{ kube_admin_users | default([]) }}"
